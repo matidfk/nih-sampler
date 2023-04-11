@@ -1,42 +1,45 @@
-#![allow(unused_imports)]
-
-use iced_baseview::Application;
-use iced_editor::IcedEditor;
-use layers::NoteLayer;
-use loaded_sample::LoadedSample;
-use map::Map;
-use nih_plug::prelude::*;
 use nih_plug_vizia::ViziaState;
-use playing_sample::PlayingSample;
+use rand::prelude::*;
 use std::{
-    collections::BTreeMap,
+    cell::RefCell,
+    collections::HashMap,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
 
-mod iced_editor;
-mod layers;
-mod loaded_sample;
-mod map;
-mod playing_sample;
-mod theme;
-mod utils;
+use rtrb;
 
-pub const TEST_SAMPLE: &str = "D:/Audio/UserPlugins/Drums/Restrains Kit Samples/BigKick-001.wav";
+use nih_plug::prelude::*;
+mod editor_vizia;
+
+pub struct LoadedSample(Vec<f32>);
+
+pub struct PlayingSample {
+    pub handle: PathBuf,
+    pub position: usize,
+}
+
+#[derive(Clone)]
+pub enum ThreadMessage {
+    LoadSample(PathBuf),
+    RemoveSample(PathBuf),
+}
 
 /// Main plugin struct
 pub struct NihSampler {
-    /// Plugin parameters
-    params: Arc<NihSamplerParams>,
-    /// Currently playing samples
+    pub params: Arc<NihSamplerParams>,
     pub playing_samples: Vec<PlayingSample>,
+    pub loaded_samples: HashMap<PathBuf, LoadedSample>,
+    pub consumer: RefCell<Option<rtrb::Consumer<ThreadMessage>>>,
 }
 
 impl Default for NihSampler {
     fn default() -> Self {
         Self {
-            params: Arc::new(NihSamplerParams::default()),
+            params: Arc::new(Default::default()),
             playing_samples: vec![],
+            loaded_samples: HashMap::with_capacity(64),
+            consumer: RefCell::new(None),
         }
     }
 }
@@ -44,17 +47,27 @@ impl Default for NihSampler {
 /// Plugin parameters struct
 #[derive(Params)]
 pub struct NihSamplerParams {
-    // #[persist = "editor-state"]
-    // editor_state: Arc<ViziaState>,
-    #[persist = "note-map"]
-    pub note_map: Arc<Mutex<Map<NoteLayer>>>,
+    #[persist = "editor-state"]
+    editor_state: Arc<ViziaState>,
+    #[persist = "sample-list"]
+    sample_list: Mutex<Vec<PathBuf>>,
+
+    #[id = "note"]
+    pub note: IntParam,
+    #[id = "min-velocity"]
+    pub min_velocity: IntParam,
+    #[id = "max-velocity"]
+    pub max_velocity: IntParam,
 }
 
 impl Default for NihSamplerParams {
     fn default() -> Self {
         Self {
-            // editor_state: editor::default_state(),
-            note_map: Arc::new(Mutex::new(Map::new())),
+            editor_state: ViziaState::new(|| (400, 400)),
+            sample_list: Mutex::new(vec![]),
+            note: IntParam::new("Note", 40, IntRange::Linear { min: 0, max: 127 }),
+            min_velocity: IntParam::new("Min velocity", 0, IntRange::Linear { min: 0, max: 127 }),
+            max_velocity: IntParam::new("Max velocity", 127, IntRange::Linear { min: 0, max: 127 }),
         }
     }
 }
@@ -65,36 +78,45 @@ impl Plugin for NihSampler {
     const URL: &'static str = "https://youtu.be/dQw4w9WgXcQ";
     const EMAIL: &'static str = "info@example.com";
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-    const DEFAULT_INPUT_CHANNELS: u32 = 0;
-    const DEFAULT_OUTPUT_CHANNELS: u32 = 2;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
     const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
+
     type SysExMessage = ();
     type BackgroundTask = ();
+
+    const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
+        main_input_channels: NonZeroU32::new(2),
+        main_output_channels: NonZeroU32::new(2),
+        ..AudioIOLayout::const_default()
+    }];
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
     }
 
     fn editor(&self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        let a = IcedEditor::new(Arc::clone(&self.params));
+        let (producer, consumer) = rtrb::RingBuffer::new(10);
+        self.consumer.replace(Some(consumer));
 
-        Some(Box::new(a.0))
-    }
-
-    fn accepts_bus_config(&self, config: &BusConfig) -> bool {
-        // This can output to any number of channels, but it doesn't take any audio inputs
-        config.num_input_channels == 0 && config.num_output_channels > 0
+        editor_vizia::create(
+            self.params.clone(),
+            self.params.editor_state.clone(),
+            Arc::new(Mutex::new(producer)),
+        )
     }
 
     fn initialize(
         &mut self,
-        _bus_config: &BusConfig,
+        _audio_io_layout: &AudioIOLayout,
         _buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
+        let sample_list = self.params.sample_list.lock().unwrap().clone();
+
+        for path in sample_list.iter() {
+            self.load_sample(path.clone()).unwrap_or(());
+        }
         return true;
-        todo!();
     }
 
     fn process(
@@ -103,55 +125,116 @@ impl Plugin for NihSampler {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        let mut next_event = context.next_event();
-        // for (sample_id, channel_samples) in buffer.iter_samples().enumerate() {
-        for channel_samples in buffer.iter_samples() {
-            while let Some(event) = next_event {
-                // if event.timing() > sample_id as u32 {
-                //     break;
-                // }
-                match event {
-                    NoteEvent::NoteOn { note, velocity, .. } => {
-                        // convert velocity from f32 to u8
-                        let velocity = (velocity * 127.0) as u8;
-
-                        if let Some(note_layer) =
-                            self.params.note_map.lock().unwrap().get_note_layer(&note)
-                        {
-                            if let Some(velocity_layer) =
-                                note_layer.velocity_map.get_velocity_layer(&velocity)
-                            {
-                                if let Some(sample_layer) =
-                                    velocity_layer.samples.get_random_sample()
-                                {
-                                    self.playing_samples
-                                        .push(PlayingSample::new(sample_layer.clone()));
-                                }
-                            }
-                        }
+        let mut consumer = self.consumer.take();
+        if let Some(consumer) = &mut consumer {
+            while let Ok(message) = consumer.pop() {
+                match message {
+                    ThreadMessage::LoadSample(path) => {
+                        self.load_sample(path).unwrap_or(());
                     }
-                    _ => (),
+                    ThreadMessage::RemoveSample(path) => {
+                        self.remove_sample(path);
+                    }
                 }
-
-                next_event = context.next_event();
             }
 
-            for sample in channel_samples {
-                for playing_sample in self.playing_samples.iter_mut() {
-                    *sample += playing_sample.get_next_sample();
+            for playing_sample in &mut self.playing_samples {
+                let data = &self.loaded_samples[&playing_sample.handle].0;
+                for channel_samples in buffer.iter_samples() {
+                    for sample in channel_samples {
+                        *sample += data.get(playing_sample.position).unwrap_or(&0.0);
+                        playing_sample.position += 1;
+                    }
                 }
-
-                self.playing_samples.retain(|e| !e.should_be_removed());
             }
         }
+
+        self.consumer.replace(consumer);
+
+        while let Some(event) = context.next_event() {
+            match event {
+                NoteEvent::NoteOn { note, velocity, .. }
+                    if note == self.params.note.value() as u8
+                        && velocity as u8 >= self.params.min_velocity.value() as u8
+                        && velocity as u8 <= self.params.max_velocity.value() as u8 =>
+                {
+                    // None if no samples are loaded
+                    if let Some((path, _sample_data)) =
+                        self.loaded_samples.iter().choose(&mut thread_rng())
+                    {
+                        let playing_sample = PlayingSample {
+                            handle: path.clone(),
+                            position: 0,
+                        };
+
+                        self.playing_samples.push(playing_sample);
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        // remove samples that are done playing
+        self.playing_samples
+            .retain(|e| e.position < self.loaded_samples[&e.handle].0.len());
 
         ProcessStatus::Normal
     }
 }
 
+impl NihSampler {
+    fn load_sample(&mut self, path: PathBuf) -> Result<(), ()> {
+        let reader = hound::WavReader::open(&path);
+        if let Ok(mut reader) = reader {
+            let spec = reader.spec();
+            let _sample_rate = spec.sample_rate as f32;
+
+            let samples = match spec.sample_format {
+                hound::SampleFormat::Int => reader
+                    .samples::<i32>()
+                    .map(|s| (s.unwrap_or_default() as f32 * 256.0) / i32::MAX as f32)
+                    .collect::<Vec<f32>>(),
+                hound::SampleFormat::Float => reader
+                    .samples::<f32>()
+                    .map(|s| s.unwrap_or_default())
+                    .collect::<Vec<f32>>(),
+            };
+
+            // resample if needed
+            // if sample_rate != self.sample_rate {
+            // let mut resampler = rubato::FftFixedIn::<f32>::new(
+            //     sample_rate as usize,
+            //     self.sample_rate as usize,
+            //     samples.len(),
+            //     2,
+            //     spec.channels as usize,
+            // )
+            // .unwrap();
+            // let out = resampler.process(&[samples], None).unwrap_or_default();
+            // out[1];
+            // }
+
+            self.loaded_samples
+                .insert(path.clone(), LoadedSample(samples));
+            self.params.sample_list.lock().unwrap().push(path);
+
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn remove_sample(&mut self, path: PathBuf) {
+        let mut sample_list = self.params.sample_list.lock().unwrap();
+        if let Some(index) = sample_list.iter().position(|e| e == &path) {
+            sample_list.remove(index);
+        }
+    }
+}
+
 impl ClapPlugin for NihSampler {
-    const CLAP_ID: &'static str = "com.moist-plugins-gmbh.gain-gui-vizia";
-    const CLAP_DESCRIPTION: Option<&'static str> = Some("A smoothed gain parameter example plugin");
+    const CLAP_ID: &'static str = "com.moist-plugins-gmbh.the-moistest-plugin-ever";
+    const CLAP_DESCRIPTION: Option<&'static str> = Some("A simple random-selection sampler");
     const CLAP_MANUAL_URL: Option<&'static str> = Some(Self::URL);
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[
@@ -163,7 +246,7 @@ impl ClapPlugin for NihSampler {
 }
 
 impl Vst3Plugin for NihSampler {
-    const VST3_CLASS_ID: [u8; 16] = *b"GainGuiVIIIZIAAA";
+    const VST3_CLASS_ID: [u8; 16] = *b"NihSamplerrrrrrr";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[
         Vst3SubCategory::Drum,
         Vst3SubCategory::Sampler,

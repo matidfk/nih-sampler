@@ -9,7 +9,6 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-atomic_float = "0.1.0"
 hound = "3.5.0"
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", features = ["standalone"] }
 nih_plug_vizia = { git = "https://github.com/robbert-vdh/nih-plug.git" }
@@ -17,6 +16,8 @@ iced_baseview = { git = "https://github.com/BillyDM/iced_baseview.git" }
 rand = "0.8.5"
 rfd = "0.11.1"
 serde = "1.0.152"
+rubato = "0.12.0"
+rtrb = "0.2.3"
 
 [workspace]
 members = ["xtask"]
