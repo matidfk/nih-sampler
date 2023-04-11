@@ -9,3 +9,6 @@ Run with:
 # TODO:
 - update UI
 - perhaps add features to not have to use multiple instances of the plugin (like the old version)
+- add min/max volume settings
+- add resampling
+- add different channel config support
