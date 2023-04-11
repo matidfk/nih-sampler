@@ -80,12 +80,13 @@ impl Plugin for NihSampler {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
     const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
+    const MIDI_OUTPUT: MidiConfig = MidiConfig::Basic;
 
     type SysExMessage = ();
     type BackgroundTask = ();
 
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
-        main_input_channels: NonZeroU32::new(2),
+        main_input_channels: None,
         main_output_channels: NonZeroU32::new(2),
         ..AudioIOLayout::const_default()
     }];
@@ -151,26 +152,37 @@ impl Plugin for NihSampler {
 
         self.consumer.replace(consumer);
 
-        while let Some(event) = context.next_event() {
-            match event {
-                NoteEvent::NoteOn { note, velocity, .. }
-                    if note == self.params.note.value() as u8
-                        && velocity as u8 >= self.params.min_velocity.value() as u8
-                        && velocity as u8 <= self.params.max_velocity.value() as u8 =>
-                {
-                    // None if no samples are loaded
-                    if let Some((path, _sample_data)) =
-                        self.loaded_samples.iter().choose(&mut thread_rng())
-                    {
-                        let playing_sample = PlayingSample {
-                            handle: path.clone(),
-                            position: 0,
-                        };
+        let mut next_event = context.next_event();
 
-                        self.playing_samples.push(playing_sample);
-                    }
+        for (sample_id, channel_samples) in buffer.iter_samples().enumerate() {
+            while let Some(event) = next_event {
+                if event.timing() > sample_id as u32 {
+                    break;
                 }
-                _ => (),
+                match event {
+                    NoteEvent::NoteOn { note, velocity, .. }
+                        if note == self.params.note.value() as u8
+                            && (velocity * 127.0) as u8
+                                >= self.params.min_velocity.value() as u8
+                            && (velocity * 127.0) as u8
+                                <= self.params.max_velocity.value() as u8 =>
+                    {
+                        // None if no samples are loaded
+                        if let Some((path, _sample_data)) =
+                            self.loaded_samples.iter().choose(&mut thread_rng())
+                        {
+                            let playing_sample = PlayingSample {
+                                handle: path.clone(),
+                                position: 0,
+                            };
+
+                            self.playing_samples.push(playing_sample);
+                        }
+                    }
+                    event => context.send_event(event),
+                    // _ => {}
+                }
+                next_event = context.next_event();
             }
         }
 
@@ -184,39 +196,44 @@ impl Plugin for NihSampler {
 
 impl NihSampler {
     fn load_sample(&mut self, path: PathBuf) -> Result<(), ()> {
-        let reader = hound::WavReader::open(&path);
-        if let Ok(mut reader) = reader {
-            let spec = reader.spec();
-            let _sample_rate = spec.sample_rate as f32;
+        if !self.loaded_samples.contains_key(&path) {
+            let reader = hound::WavReader::open(&path);
+            if let Ok(mut reader) = reader {
+                let spec = reader.spec();
+                let _sample_rate = spec.sample_rate as f32;
 
-            let samples = match spec.sample_format {
-                hound::SampleFormat::Int => reader
-                    .samples::<i32>()
-                    .map(|s| (s.unwrap_or_default() as f32 * 256.0) / i32::MAX as f32)
-                    .collect::<Vec<f32>>(),
-                hound::SampleFormat::Float => reader
-                    .samples::<f32>()
-                    .map(|s| s.unwrap_or_default())
-                    .collect::<Vec<f32>>(),
-            };
+                let samples = match spec.sample_format {
+                    hound::SampleFormat::Int => reader
+                        .samples::<i32>()
+                        .map(|s| (s.unwrap_or_default() as f32 * 256.0) / i32::MAX as f32)
+                        .collect::<Vec<f32>>(),
+                    hound::SampleFormat::Float => reader
+                        .samples::<f32>()
+                        .map(|s| s.unwrap_or_default())
+                        .collect::<Vec<f32>>(),
+                };
 
-            // resample if needed
-            // if sample_rate != self.sample_rate {
-            // let mut resampler = rubato::FftFixedIn::<f32>::new(
-            //     sample_rate as usize,
-            //     self.sample_rate as usize,
-            //     samples.len(),
-            //     2,
-            //     spec.channels as usize,
-            // )
-            // .unwrap();
-            // let out = resampler.process(&[samples], None).unwrap_or_default();
-            // out[1];
-            // }
+                // resample if needed
+                // if sample_rate != self.sample_rate {
+                // let mut resampler = rubato::FftFixedIn::<f32>::new(
+                //     sample_rate as usize,
+                //     self.sample_rate as usize,
+                //     samples.len(),
+                //     2,
+                //     spec.channels as usize,
+                // )
+                // .unwrap();
+                // let out = resampler.process(&[samples], None).unwrap_or_default();
+                // out[1];
+                // }
 
-            self.loaded_samples
-                .insert(path.clone(), LoadedSample(samples));
-            self.params.sample_list.lock().unwrap().push(path);
+                self.loaded_samples
+                    .insert(path.clone(), LoadedSample(samples));
+            }
+
+            if !self.params.sample_list.lock().unwrap().contains(&path) {
+                self.params.sample_list.lock().unwrap().push(path);
+            }
 
             Ok(())
         } else {
