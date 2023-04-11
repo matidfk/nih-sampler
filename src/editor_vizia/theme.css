@@ -1,0 +1,11 @@
+.params-list {
+    row-between: 5px;
+}
+
+.param-row {
+    height: auto;
+}
+
+.param-label {
+    width: auto;
+}
