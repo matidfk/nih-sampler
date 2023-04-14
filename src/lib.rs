@@ -1,3 +1,4 @@
+use crate::playing_sample::PlayingSample;
 use nih_plug_vizia::ViziaState;
 use rand::prelude::*;
 use std::{
@@ -11,13 +12,9 @@ use rtrb;
 
 use nih_plug::prelude::*;
 mod editor_vizia;
+mod playing_sample;
 
 pub struct LoadedSample(Vec<f32>);
-
-pub struct PlayingSample {
-    pub handle: PathBuf,
-    pub position: usize,
-}
 
 #[derive(Clone)]
 pub enum ThreadMessage {
@@ -54,10 +51,16 @@ pub struct NihSamplerParams {
 
     #[id = "note"]
     pub note: IntParam,
+
     #[id = "min-velocity"]
     pub min_velocity: IntParam,
     #[id = "max-velocity"]
     pub max_velocity: IntParam,
+
+    #[id = "min-volume"]
+    pub min_volume: FloatParam,
+    #[id = "max-volume"]
+    pub max_volume: FloatParam,
 }
 
 impl Default for NihSamplerParams {
@@ -68,6 +71,22 @@ impl Default for NihSamplerParams {
             note: IntParam::new("Note", 40, IntRange::Linear { min: 0, max: 127 }),
             min_velocity: IntParam::new("Min velocity", 0, IntRange::Linear { min: 0, max: 127 }),
             max_velocity: IntParam::new("Max velocity", 127, IntRange::Linear { min: 0, max: 127 }),
+            min_volume: FloatParam::new(
+                "Min volume",
+                util::db_to_gain(0.0),
+                FloatRange::Linear { min: 0.0, max: 2.0 },
+            )
+            .with_unit(" dB")
+            .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
+            .with_string_to_value(formatters::s2v_f32_gain_to_db()),
+            max_volume: FloatParam::new(
+                "Max volume",
+                util::db_to_gain(0.0),
+                FloatRange::Linear { min: 0.0, max: 2.0 },
+            )
+            .with_unit(" dB")
+            .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
+            .with_string_to_value(formatters::s2v_f32_gain_to_db()),
         }
     }
 }
@@ -126,6 +145,38 @@ impl Plugin for NihSampler {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
+        self.proess_messages();
+        self.process_midi(context, buffer);
+
+        for playing_sample in &mut self.playing_samples {
+            let data = &self.loaded_samples[&playing_sample.handle].0;
+            for channel_samples in buffer.iter_samples() {
+                for sample in channel_samples {
+                    *sample +=
+                        data.get(playing_sample.position).unwrap_or(&0.0) * playing_sample.gain;
+                    playing_sample.position += 1;
+                }
+            }
+        }
+
+        // remove samples that are done playing
+        self.playing_samples
+            .retain(|e| e.position < self.loaded_samples[&e.handle].0.len());
+
+        ProcessStatus::Normal
+    }
+}
+
+impl NihSampler {
+    fn velocity_to_gain(&self, velocity: u8) -> f32 {
+        // this is just mapping from the velocity range to volume range
+        self.params.min_volume.value()
+            + (self.params.max_volume.value() - self.params.min_volume.value())
+                * (velocity - self.params.min_velocity.value() as u8) as f32
+                / (self.params.max_velocity.value() - self.params.min_velocity.value()) as f32
+    }
+
+    fn proess_messages(&mut self) {
         let mut consumer = self.consumer.take();
         if let Some(consumer) = &mut consumer {
             while let Ok(message) = consumer.pop() {
@@ -138,23 +189,14 @@ impl Plugin for NihSampler {
                     }
                 }
             }
-
-            for playing_sample in &mut self.playing_samples {
-                let data = &self.loaded_samples[&playing_sample.handle].0;
-                for channel_samples in buffer.iter_samples() {
-                    for sample in channel_samples {
-                        *sample += data.get(playing_sample.position).unwrap_or(&0.0);
-                        playing_sample.position += 1;
-                    }
-                }
-            }
         }
 
         self.consumer.replace(consumer);
+    }
 
+    fn process_midi(&mut self, context: &mut impl ProcessContext<Self>, buffer: &mut Buffer) {
         let mut next_event = context.next_event();
-
-        for (sample_id, channel_samples) in buffer.iter_samples().enumerate() {
+        for (sample_id, _channel_samples) in buffer.iter_samples().enumerate() {
             while let Some(event) = next_event {
                 if event.timing() > sample_id as u32 {
                     break;
@@ -171,10 +213,10 @@ impl Plugin for NihSampler {
                         if let Some((path, _sample_data)) =
                             self.loaded_samples.iter().choose(&mut thread_rng())
                         {
-                            let playing_sample = PlayingSample {
-                                handle: path.clone(),
-                                position: 0,
-                            };
+                            let playing_sample = PlayingSample::new(
+                                path.clone(),
+                                self.velocity_to_gain((velocity * 127.0) as u8),
+                            );
 
                             self.playing_samples.push(playing_sample);
                         }
@@ -185,16 +227,8 @@ impl Plugin for NihSampler {
                 next_event = context.next_event();
             }
         }
-
-        // remove samples that are done playing
-        self.playing_samples
-            .retain(|e| e.position < self.loaded_samples[&e.handle].0.len());
-
-        ProcessStatus::Normal
     }
-}
 
-impl NihSampler {
     fn load_sample(&mut self, path: PathBuf) -> Result<(), ()> {
         if !self.loaded_samples.contains_key(&path) {
             let reader = hound::WavReader::open(&path);

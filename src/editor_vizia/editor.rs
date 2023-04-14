@@ -104,6 +104,18 @@ pub fn create(
                 ParamSlider::new(cx, Data::params, |params| &params.max_velocity);
             })
             .class("param-row");
+
+            HStack::new(cx, |cx| {
+                Label::new(cx, "Min Volume").class("param-label");
+                ParamSlider::new(cx, Data::params, |params| &params.min_volume);
+            })
+            .class("param-row");
+
+            HStack::new(cx, |cx| {
+                Label::new(cx, "Max Volume").class("param-label");
+                ParamSlider::new(cx, Data::params, |params| &params.max_volume);
+            })
+            .class("param-row");
         })
         .class("params-list");
 
