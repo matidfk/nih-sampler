@@ -1,6 +1,7 @@
 use crate::playing_sample::PlayingSample;
 use nih_plug_vizia::ViziaState;
 use rand::prelude::*;
+use rubato::Resampler;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -14,7 +15,8 @@ use nih_plug::prelude::*;
 mod editor_vizia;
 mod playing_sample;
 
-pub struct LoadedSample(Vec<f32>);
+/// A loaded sample stored as a vec of channels
+pub struct LoadedSample(Vec<Vec<f32>>);
 
 #[derive(Clone)]
 pub enum ThreadMessage {
@@ -26,6 +28,7 @@ pub enum ThreadMessage {
 pub struct NihSampler {
     pub params: Arc<NihSamplerParams>,
     pub playing_samples: Vec<PlayingSample>,
+    pub sample_rate: f32,
     pub loaded_samples: HashMap<PathBuf, LoadedSample>,
     pub consumer: RefCell<Option<rtrb::Consumer<ThreadMessage>>>,
 }
@@ -37,6 +40,7 @@ impl Default for NihSampler {
             playing_samples: vec![],
             loaded_samples: HashMap::with_capacity(64),
             consumer: RefCell::new(None),
+            sample_rate: 44100.0,
         }
     }
 }
@@ -128,7 +132,7 @@ impl Plugin for NihSampler {
     fn initialize(
         &mut self,
         _audio_io_layout: &AudioIOLayout,
-        _buffer_config: &BufferConfig,
+        buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
         let sample_list = self.params.sample_list.lock().unwrap().clone();
@@ -136,6 +140,9 @@ impl Plugin for NihSampler {
         for path in sample_list.iter() {
             self.load_sample(path.clone()).unwrap_or(());
         }
+
+        self.sample_rate = buffer_config.sample_rate;
+
         return true;
     }
 
@@ -151,11 +158,15 @@ impl Plugin for NihSampler {
         for playing_sample in &mut self.playing_samples {
             let data = &self.loaded_samples[&playing_sample.handle].0;
             for channel_samples in buffer.iter_samples() {
-                for sample in channel_samples {
-                    *sample +=
-                        data.get(playing_sample.position).unwrap_or(&0.0) * playing_sample.gain;
-                    playing_sample.position += 1;
+                for (channel_index, sample) in channel_samples.into_iter().enumerate() {
+                    *sample += data
+                        .get(channel_index)
+                        .unwrap_or(&vec![])
+                        .get(playing_sample.position)
+                        .unwrap_or(&0.0)
+                        * playing_sample.gain;
                 }
+                playing_sample.position += 1;
             }
         }
 
@@ -165,6 +176,19 @@ impl Plugin for NihSampler {
 
         ProcessStatus::Normal
     }
+}
+
+fn uninterleave(samples: Vec<f32>, channels: usize) -> Vec<Vec<f32>> {
+    let mut new_samples = vec![vec![]; channels];
+    let mut i = 0;
+    let mut iter = samples.into_iter();
+
+    while let Some(sample) = iter.next() {
+        new_samples[i % channels].push(sample);
+        i += 1;
+    }
+
+    new_samples
 }
 
 impl NihSampler {
@@ -231,10 +255,12 @@ impl NihSampler {
 
     fn load_sample(&mut self, path: PathBuf) -> Result<(), ()> {
         if !self.loaded_samples.contains_key(&path) {
+            // wav only for now
             let reader = hound::WavReader::open(&path);
             if let Ok(mut reader) = reader {
                 let spec = reader.spec();
-                let _sample_rate = spec.sample_rate as f32;
+                let sample_rate = spec.sample_rate as f32;
+                let channels = spec.channels as usize;
 
                 let samples = match spec.sample_format {
                     hound::SampleFormat::Int => reader
@@ -247,19 +273,35 @@ impl NihSampler {
                         .collect::<Vec<f32>>(),
                 };
 
+                let samples = uninterleave(samples, channels);
+
                 // resample if needed
-                // if sample_rate != self.sample_rate {
-                // let mut resampler = rubato::FftFixedIn::<f32>::new(
-                //     sample_rate as usize,
-                //     self.sample_rate as usize,
-                //     samples.len(),
-                //     2,
-                //     spec.channels as usize,
-                // )
-                // .unwrap();
-                // let out = resampler.process(&[samples], None).unwrap_or_default();
-                // out[1];
-                // }
+                if sample_rate != self.sample_rate {
+                    let mut resampler = rubato::FftFixedIn::<f32>::new(
+                        sample_rate as usize,
+                        self.sample_rate as usize,
+                        samples.len(),
+                        2,
+                        spec.channels as usize,
+                    )
+                    .unwrap();
+
+                    let chunksize = resampler.input_frames_next();
+
+                    let num_chunks = samples.len() / (spec.channels as usize * chunksize);
+
+                    let mut new_samples = vec![vec![]; channels];
+                    for _chunk in 0..num_chunks {
+                        //TODO samples to vec vec not vec
+                        let waves_out = resampler.process(&samples, None).unwrap();
+                        for (channel_index, channel) in waves_out.into_iter().enumerate() {
+                            for (sample_index, sample) in channel.into_iter().enumerate() {
+                                new_samples[channel_index].push(sample);
+                            }
+                        }
+                    }
+                    let samples = new_samples;
+                }
 
                 self.loaded_samples
                     .insert(path.clone(), LoadedSample(samples));
