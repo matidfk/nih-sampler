@@ -15,7 +15,7 @@ use nih_plug::prelude::*;
 mod editor_vizia;
 mod playing_sample;
 
-/// A loaded sample stored as a vec of channels
+/// A loaded sample stored as a vec of samples
 pub struct LoadedSample(Vec<Vec<f32>>);
 
 #[derive(Clone)]
@@ -159,10 +159,16 @@ impl Plugin for NihSampler {
             let data = &self.loaded_samples[&playing_sample.handle].0;
             for channel_samples in buffer.iter_samples() {
                 for (channel_index, sample) in channel_samples.into_iter().enumerate() {
+                    // *sample += data
+                    //     .get(channel_index)
+                    //     .unwrap_or(&vec![])
+                    //     .get(playing_sample.position)
+                    //     .unwrap_or(&0.0)
+                    //     * playing_sample.gain;
                     *sample += data
-                        .get(channel_index)
-                        .unwrap_or(&vec![])
                         .get(playing_sample.position)
+                        .unwrap_or(&vec![])
+                        .get(channel_index)
                         .unwrap_or(&0.0)
                         * playing_sample.gain;
                 }
@@ -180,13 +186,17 @@ impl Plugin for NihSampler {
 
 fn uninterleave(samples: Vec<f32>, channels: usize) -> Vec<Vec<f32>> {
     let mut new_samples = vec![vec![]; channels];
-    let mut i = 0;
-    let mut iter = samples.into_iter();
 
-    while let Some(sample) = iter.next() {
-        new_samples[i % channels].push(sample);
-        i += 1;
+    for sample in samples.chunks(channels) {
+        new_samples.push(sample.to_vec());
     }
+    // let mut i = 0;
+    // let mut iter = samples.into_iter();
+    //
+    // while let Some(sample) = iter.next() {
+    //     new_samples[i % channels].push(sample);
+    //     i += 1;
+    // }
 
     new_samples
 }
