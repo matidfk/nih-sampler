@@ -14,3 +14,5 @@ Run with:
 - add min/max volume settings
 - add resampling
 - add different channel config support
+
+All code is licensed under the [GPLv3](https://www.gnu.org/licenses/gpl-3.0.txt) license.
