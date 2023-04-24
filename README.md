@@ -8,11 +8,14 @@ Run with:
 
 `cargo xtask bundle nih-sampler`
 
+Features:
+- Automatically reload and resample all samples when sample rate changes
+- Min and max volume, the volume is calculated by mapping velocity
+
+
 # TODO:
-- update UI
+- find better font
 - perhaps add features to not have to use multiple instances of the plugin (like the old version)
-- add min/max volume settings
-- add resampling
 - add different channel config support
 
 All code is licensed under the [GPLv3](https://www.gnu.org/licenses/gpl-3.0.txt) license.
