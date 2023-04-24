@@ -1,5 +1,7 @@
 # Nih-Sampler
 
+![Screenshot](./screenshot.png)
+
 A simple sampler written with [nih-plug](https://github.com/robbert-vdh/nih-plug.git).
 
 Run with:

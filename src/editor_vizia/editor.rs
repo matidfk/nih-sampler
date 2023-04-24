@@ -10,13 +10,19 @@ use nih_plug::prelude::*;
 use nih_plug_vizia::vizia::prelude::*;
 use nih_plug_vizia::widgets::*;
 
-use crate::{NihSamplerParams, ThreadMessage};
+use crate::{
+    visualizer::{self, Visualizer},
+    NihSamplerParams, ThreadMessage,
+};
+
+use super::visualizer::VisualizerView;
 
 #[derive(Lens)]
 struct Data {
     params: Arc<NihSamplerParams>,
     producer: Arc<Mutex<rtrb::Producer<ThreadMessage>>>,
     debug: String,
+    visualizer: Arc<Visualizer>,
 }
 
 #[derive(Clone)]
@@ -72,84 +78,88 @@ pub fn create(
     params: Arc<NihSamplerParams>,
     editor_state: Arc<ViziaState>,
     producer: Arc<Mutex<rtrb::Producer<ThreadMessage>>>,
+    visualizer: Arc<Visualizer>,
 ) -> Option<Box<dyn Editor>> {
     create_vizia_editor(editor_state, ViziaTheming::Custom, move |cx, _| {
         cx.add_theme(include_str!("theme.css"));
+
         Data {
             params: params.clone(),
             producer: producer.clone(),
             debug: "nothing".into(),
+            visualizer: visualizer.clone(),
         }
         .build(cx);
 
         ResizeHandle::new(cx);
-
-        Label::new(cx, Data::debug);
-
         VStack::new(cx, |cx| {
             HStack::new(cx, |cx| {
-                Label::new(cx, "MIDI Note").class("param-label");
-                ParamSlider::new(cx, Data::params, |params| &params.note);
+                Label::new(cx, "Nih Sampler").id("logo");
+                VisualizerView::new(cx, Data::visualizer).id("visualizer");
             })
-            .class("param-row");
+            .class("top-bar");
 
-            HStack::new(cx, |cx| {
-                Label::new(cx, "Min Velocity").class("param-label");
-                ParamSlider::new(cx, Data::params, |params| &params.min_velocity);
-            })
-            .class("param-row");
+            VStack::new(cx, |cx| {
+                // Label::new(cx, Data::debug).overflow(Overflow::Hidden);
+                Label::new(cx, "Settings").class("heading");
+                GenericUi::new(cx, Data::params).id("settings-container");
 
-            HStack::new(cx, |cx| {
-                Label::new(cx, "Max Velocity").class("param-label");
-                ParamSlider::new(cx, Data::params, |params| &params.max_velocity);
-            })
-            .class("param-row");
+                HStack::new(cx, |cx| {
+                    Label::new(cx, "Samples").class("heading");
 
-            HStack::new(cx, |cx| {
-                Label::new(cx, "Min Volume").class("param-label");
-                ParamSlider::new(cx, Data::params, |params| &params.min_volume);
-            })
-            .class("param-row");
+                    Button::new(
+                        cx,
+                        |cx| cx.emit(AppEvent::OpenFilePicker),
+                        |cx| Label::new(cx, "Add Sample(s)"),
+                    )
+                    .id("add-sample-button");
+                })
+                .height(Auto)
+                .col_between(Stretch(1.0));
 
-            HStack::new(cx, |cx| {
-                Label::new(cx, "Max Volume").class("param-label");
-                ParamSlider::new(cx, Data::params, |params| &params.max_volume);
+                ScrollView::new(cx, 0.0, 0.0, false, true, |cx| {
+                    List::new(
+                        cx,
+                        Data::params.map(|params| params.sample_list.lock().unwrap().clone()),
+                        |cx, index, item| {
+                            HStack::new(cx, |cx| {
+                                Label::new(
+                                    cx,
+                                    &item
+                                        .get(cx)
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy()
+                                        .to_string(),
+                                );
+                                Label::new(cx, "Remove").class("remove-label").on_press(
+                                    move |cx| cx.emit(AppEvent::RemoveSample(item.get(cx).clone())),
+                                );
+                            })
+                            .class("sample");
+                        },
+                    )
+                    .class("vert-list")
+                    .class("sample-list");
+                })
+                .class("sample-scrollview");
             })
-            .class("param-row");
+            .class("main-body")
+            .class("vert-list");
         })
-        .class("params-list");
-
-        // Display all the loaded samples
-        ScrollView::new(cx, 0.0, 0.0, false, true, |cx| {
-            List::new(
-                cx,
-                Data::params.map(|params| params.sample_list.lock().unwrap().clone()),
-                |cx, index, item| {
-                    HStack::new(cx, |cx| {
-                        Label::new(
-                            cx,
-                            &item
-                                .get(cx)
-                                .file_name()
-                                .unwrap_or_default()
-                                .to_string_lossy()
-                                .to_string(),
-                        );
-
-                        Button::new(
-                            cx,
-                            move |cx| cx.emit(AppEvent::RemoveSample(item.get(cx).clone())),
-                            |cx| Label::new(cx, "Remove"),
-                        );
-                    });
-                },
-            );
-        });
-
-        Button::new(
-            cx,
-            |cx| cx.emit(AppEvent::OpenFilePicker),
-            |cx| Label::new(cx, "Add Sample(s)"),
-        );
+        .id("container");
     })
+}
+fn param_row<L, Params, P, FMap>(cx: &mut Context, label: &str, params: L, params_to_param: FMap)
+where
+    L: Lens<Target = Params> + Clone,
+    Params: 'static,
+    P: Param + 'static,
+    FMap: Fn(&Params) -> &P + Copy + 'static,
+{
+    HStack::new(cx, |cx| {
+        Label::new(cx, label).class("param-label");
+        ParamSlider::new(cx, params, params_to_param);
+    })
+    .class("row");
 }

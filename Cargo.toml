@@ -16,7 +16,7 @@ iced_baseview = { git = "https://github.com/BillyDM/iced_baseview.git" }
 rand = "0.8.5"
 rfd = "0.11.1"
 serde = "1.0.152"
-rubato = "0.12.0"
+rubato = { git = "https://github.com/HEnquist/rubato.git", branch = "next-0.13" }
 rtrb = "0.2.3"
 
 [workspace]

@@ -1,11 +1,97 @@
-.params-list {
-    row-between: 5px;
+.sample {
+    child-space: 5px;
+    col-between: 1s;
+    background-color: #282828;
+    height: auto;
+    border-radius: 5px;
 }
 
-.param-row {
+.main-body {
+    background-color: #141414;
+    color: #f2f2f2;
+    child-space: 10px;
+}
+
+#settings-container {
+    background-color: #282828;
+    border-radius: 5px;
     height: auto;
 }
 
-.param-label {
-    width: auto;
+.top-bar {
+    background-color: #f2f2f2;
+    color: #141414;
+    height: auto;
+    child-space: 10px;
+    col-between: 1s;
+}
+
+#logo {
+    font-size: 32px;
+}
+
+#container {
+    border-width: 2px;
+    border-color: #141414;
+}
+
+#add-sample-button {
+    border-width: 0px;
+    border-radius: 5px;
+    background-color: #ffcc30;
+}
+
+param-slider .fill {
+  background-color: #424242;
+    border-radius: 4px;
+}
+
+param-slider .fill--modulation {
+  background-color: #9a27ed;
+}
+
+param-slider {
+    border-color: #121212;
+    border-radius: 5px;
+}
+
+#visualizer {
+    color: #141414;
+    stretch: 6s;
+}
+
+.vert-list {
+    row-between: 5px;
+}
+
+.sample-list {
+    width: 1s;
+}
+
+.heading {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.sample-scrollview > scrollbar > .thumb {
+    min-width: 5px;
+    width: 5px;
+    background-color: #f2f2f2;
+    border-radius: 2px;
+}
+
+.sample-scrollview > scrollbar.vertical {
+    width: 5px;
+    min-width: 5px;
+    background-color: #282828;
+    border-radius: 2px;
+}
+
+.remove-button {
+    color: #f01e1e;
+}
+
+.remove-label {
+    color: #f01e1e;
+    cursor: hand;
 }
