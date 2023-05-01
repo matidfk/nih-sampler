@@ -226,43 +226,32 @@ fn uninterleave(samples: Vec<f32>, channels: usize) -> LoadedSample {
     LoadedSample(new_samples)
 }
 
-fn resample(
-    samples: LoadedSample,
-    sample_rate_in: f32,
-    sample_rate_out: f32,
-    channels: usize,
-) -> LoadedSample {
+fn resample(samples: LoadedSample, sample_rate_in: f32, sample_rate_out: f32) -> LoadedSample {
     let samples = samples.0;
     let mut resampler = rubato::FftFixedIn::<f32>::new(
         sample_rate_in as usize,
         sample_rate_out as usize,
         samples[0].len(),
-        2,
-        channels as usize,
+        8,
+        samples.len(),
     )
     .unwrap();
 
-    let mut new_samples = vec![];
-
-    let waves_out = resampler.process(&samples, None);
-    match waves_out {
-        Ok(waves_out) => {
-            for samples in waves_out.into_iter() {
-                new_samples.push(samples);
-            }
-
+    match resampler.process(&samples, None) {
+        Ok(mut waves_out) => {
             // get the duration of leading silence introduced by FFT
             // https://github.com/HEnquist/rubato/blob/52cdc3eb8e2716f40bc9b444839bca067c310592/src/synchro.rs#L654
-
             let silence_len = resampler.output_delay();
-            for channel in new_samples.iter_mut() {
-                channel.drain(0..silence_len);
-            }
-        }
-        Err(_) => {}
-    }
 
-    LoadedSample(new_samples)
+            for channel in waves_out.iter_mut() {
+                channel.drain(..silence_len);
+                channel.shrink_to_fit();
+            }
+
+            LoadedSample(waves_out)
+        }
+        Err(_) => LoadedSample(vec![]),
+    }
 }
 
 impl NihSampler {
@@ -335,7 +324,6 @@ impl NihSampler {
             let spec = reader.spec();
             let sample_rate = spec.sample_rate as f32;
             let channels = spec.channels as usize;
-            nih_log!("channels: {}", channels);
 
             let interleaved_samples = match spec.sample_format {
                 hound::SampleFormat::Int => reader
@@ -352,7 +340,7 @@ impl NihSampler {
 
             // resample if needed
             if sample_rate != self.sample_rate {
-                samples = resample(samples, sample_rate, self.sample_rate, channels);
+                samples = resample(samples, sample_rate, self.sample_rate);
             }
 
             self.loaded_samples.insert(path.clone(), samples);
