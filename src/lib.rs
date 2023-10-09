@@ -1,4 +1,5 @@
 use crate::playing_sample::PlayingSample;
+use editor_vizia::visualizer::VisualizerData;
 use nih_plug_vizia::ViziaState;
 use rand::prelude::*;
 use rubato::Resampler;
@@ -8,14 +9,12 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
 };
-use visualizer::Visualizer;
 
 use rtrb;
 
 use nih_plug::prelude::*;
 mod editor_vizia;
 mod playing_sample;
-pub mod visualizer;
 
 /// A loaded sample stored as a vec of samples in the form:
 /// [
@@ -37,7 +36,7 @@ pub struct NihSampler {
     pub sample_rate: f32,
     pub loaded_samples: HashMap<PathBuf, LoadedSample>,
     pub consumer: RefCell<Option<rtrb::Consumer<ThreadMessage>>>,
-    pub visualizer: Arc<Visualizer>,
+    pub visualizer: Arc<VisualizerData>,
 }
 
 impl Default for NihSampler {
@@ -48,7 +47,7 @@ impl Default for NihSampler {
             loaded_samples: HashMap::with_capacity(64),
             consumer: RefCell::new(None),
             sample_rate: 44100.0,
-            visualizer: Arc::new(Visualizer::new()),
+            visualizer: Arc::new(VisualizerData::new()),
         }
     }
 }
@@ -126,7 +125,7 @@ impl Plugin for NihSampler {
         self.params.clone()
     }
 
-    fn editor(&self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
         let (producer, consumer) = rtrb::RingBuffer::new(10);
         self.consumer.replace(Some(consumer));
 
@@ -168,25 +167,26 @@ impl Plugin for NihSampler {
         let mut amplitude = 0.0;
 
         for playing_sample in &mut self.playing_samples {
-            match self.loaded_samples.get(&playing_sample.handle) {
-                Some(loaded_sample) => {
-                    for channel_samples in buffer.iter_samples() {
-                        // channel_samples is [a, b, c]
+            // attempt to get sample data
+            if let Some(loaded_sample) = self.loaded_samples.get(&playing_sample.handle) {
+                // channel_samples is [a, b, c]
+                for channel_samples in buffer.iter_samples() {
+                    // if sample isnt in the future
+                    if playing_sample.position >= 0 {
                         for (channel_index, sample) in channel_samples.into_iter().enumerate() {
                             let s = loaded_sample
                                 .0
                                 .get(channel_index)
                                 .unwrap_or(&vec![])
-                                .get(playing_sample.position)
+                                .get(playing_sample.position as usize)
                                 .unwrap_or(&0.0)
                                 * playing_sample.gain;
                             *sample += s;
                             amplitude += s.abs();
                         }
-                        playing_sample.position += 1;
                     }
+                    playing_sample.position += 1;
                 }
-                None => {}
             }
         }
 
@@ -196,7 +196,7 @@ impl Plugin for NihSampler {
         // remove samples that are done playing
         self.playing_samples
             .retain(|e| match self.loaded_samples.get(&e.handle) {
-                Some(sample) => e.position < sample.0[0].len(),
+                Some(sample) => e.position < sample.0[0].len() as isize,
                 None => false,
             });
 
@@ -283,6 +283,8 @@ impl NihSampler {
 
     fn process_midi(&mut self, context: &mut impl ProcessContext<Self>, buffer: &mut Buffer) {
         let mut next_event = context.next_event();
+        let start_sample = context.transport().pos_samples().unwrap_or_default();
+
         for (sample_id, _channel_samples) in buffer.iter_samples().enumerate() {
             while let Some(event) = next_event {
                 if event.timing() > sample_id as u32 {
@@ -298,12 +300,21 @@ impl NihSampler {
                     {
                         // None if no samples are loaded
                         if let Some((path, _sample_data)) =
-                            self.loaded_samples.iter().choose(&mut thread_rng())
+                            // Get a random sample but based on the current sample position in
+                            // project
+                            self.loaded_samples
+                                    .iter()
+                                    .choose(&mut StdRng::seed_from_u64(
+                                        start_sample.unsigned_abs() + event.timing() as u64,
+                                    ))
                         {
-                            let playing_sample = PlayingSample::new(
+                            let mut playing_sample = PlayingSample::new(
                                 path.clone(),
                                 self.velocity_to_gain((velocity * 127.0) as u8),
                             );
+
+                            // start at correct position in buffer
+                            playing_sample.position = -(event.timing() as isize);
 
                             self.playing_samples.push(playing_sample);
                         }

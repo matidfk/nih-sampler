@@ -10,19 +10,16 @@ use nih_plug::prelude::*;
 use nih_plug_vizia::vizia::prelude::*;
 use nih_plug_vizia::widgets::*;
 
-use crate::{
-    visualizer::{self, Visualizer},
-    NihSamplerParams, ThreadMessage,
-};
+use crate::{NihSamplerParams, ThreadMessage};
 
-use super::visualizer::VisualizerView;
+use super::visualizer::{Visualizer, VisualizerData};
 
 #[derive(Lens)]
 struct Data {
     params: Arc<NihSamplerParams>,
     producer: Arc<Mutex<rtrb::Producer<ThreadMessage>>>,
     debug: String,
-    visualizer: Arc<Visualizer>,
+    visualizer: Arc<VisualizerData>,
 }
 
 #[derive(Clone)]
@@ -78,10 +75,11 @@ pub fn create(
     params: Arc<NihSamplerParams>,
     editor_state: Arc<ViziaState>,
     producer: Arc<Mutex<rtrb::Producer<ThreadMessage>>>,
-    visualizer: Arc<Visualizer>,
+    visualizer: Arc<VisualizerData>,
 ) -> Option<Box<dyn Editor>> {
     create_vizia_editor(editor_state, ViziaTheming::Custom, move |cx, _| {
         cx.add_theme(include_str!("theme.css"));
+        cx.add_fonts_mem(&[include_bytes!("./BebasNeue-Regular.ttf")]);
 
         Data {
             params: params.clone(),
@@ -95,7 +93,7 @@ pub fn create(
         VStack::new(cx, |cx| {
             HStack::new(cx, |cx| {
                 Label::new(cx, "Nih Sampler").id("logo");
-                VisualizerView::new(cx, Data::visualizer).id("visualizer");
+                Visualizer::new(cx, Data::visualizer).id("visualizer");
             })
             .class("top-bar");
 

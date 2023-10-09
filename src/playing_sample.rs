@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 pub struct PlayingSample {
     pub handle: PathBuf,
-    pub position: usize,
+    pub position: isize,
     pub gain: f32,
 }
 

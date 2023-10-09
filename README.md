@@ -3,14 +3,16 @@
 ![Screenshot](./screenshot.png)
 
 A simple sampler written with [nih-plug](https://github.com/robbert-vdh/nih-plug.git).
+Mainly made for myself to create setups for programming drums
 
 Run with:
 
-`cargo xtask bundle nih-sampler`
+`cargo xtask bundle nih-sampler --release`
 
 Features:
 - Automatically reload and resample all samples when sample rate changes
 - Min and max volume, the volume is calculated by mapping velocity
+- Deterministic sample picker
 
 
 # TODO:
