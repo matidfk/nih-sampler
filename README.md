@@ -19,5 +19,7 @@ Features:
 - find better font
 - perhaps add features to not have to use multiple instances of the plugin (like the old version)
 - add different channel config support
+- update to latest versions
+- add icons
 
 All code is licensed under the [GPLv3](https://www.gnu.org/licenses/gpl-3.0.txt) license.
